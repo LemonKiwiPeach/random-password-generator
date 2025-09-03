@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Falling Sand Toy — Single File</title>
+  <style>
+    :root{
+      --bg:#0b1020;--panel:#121a2f;--text:#e6f1ff;--muted:#9fb0d1;--accent:#58a6ff;--border:#223052;
+      --btn:#1b2a4b;--btn2:#23365f
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{margin:0;background:var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,"Hiragino Kaku Gothic ProN",Meiryo,"Noto Sans JP",sans-serif;display:flex;flex-direction:column}
+    header{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border);background:var(--panel)}
+    .left,.right{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .title{font-weight:700;font-size:16px;color:var(--muted)}
+    .ctl,select,button,input[type="range"]{background:var(--btn);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:8px 10px;font-size:13px}
+    button{cursor:pointer}
+    button:hover,select:hover{background:var(--btn2)}
+    main{display:grid;grid-template-columns:1fr;gap:10px;padding:12px}
+    .wrap{display:grid;grid-template-columns:1fr;gap:12px}
+    .canvasWrap{display:grid;place-items:center}
+    canvas{image-rendering:pixelated;box-shadow:0 10px 30px rgba(0,0,0,.35);border:1px solid var(--border);background:#000}
+    footer{padding:8px 12px;color:var(--muted);font-size:12px;border-top:1px solid var(--border)}
+    .badge{background:#24365f;color:var(--muted);border:1px solid var(--border);border-radius:8px;padding:4px 8px;font-size:12px}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="left">
+      <span class="title">Falling Sand Toy</span>
+      <label class="ctl">素材
+        <select id="material">
+          <option value="1">砂</option>
+          <option value="2">水</option>
+          <option value="3">石</option>
+          <option value="4">煙（軽い粒子）</option>
+          <option value="0">消しゴム</option>
+        </select>
+      </label>
+      <label class="ctl">ブラシ <input id="brush" type="range" min="1" max="12" value="4"/></label>
+      <button id="clear">全消去</button>
+      <button id="random">ランダム</button>
+      <button id="pause">一時停止</button>
+      <span class="badge" id="fps">FPS: -</span>
+    </div>
+    <div class="right">
+      <span class="badge">クリック/ドラッグで配置、右クリックで消去</span>
+    </div>
+  </header>
+  <main>
+    <div class="wrap">
+      <div class="canvasWrap">
+        <canvas id="view" width="240" height="160" aria-label="Falling Sand Canvas"></canvas>
+      </div>
+    </div>
+  </main>
+  <footer>
+    砂は下に落ち、水は横に流れ、煙は上に昇ります。石は動きません。ローカルのみで動作、外部通信はありません。
+  </footer>
+
+  <script>
+    // Configurable logical grid size (pixels will be scaled to fit window)
+    const W = 240, H = 160;
+    const Material = { Empty:0, Sand:1, Water:2, Stone:3, Smoke:4 };
+
+    const canvas = document.getElementById('view');
+    const ctx = canvas.getContext('2d');
+    const img = ctx.createImageData(W, H);
+    const grid = new Uint8Array(W*H);      // current
+    const next = new Uint8Array(W*H);      // next buffer
+    const temp = new Uint8Array(W*H);      // swap temp
+    const rand = (n)=>Math.floor(Math.random()*n);
+
+    // Coloring
+    function setPx(ix, r,g,b){ const o=ix*4; img.data[o]=r; img.data[o+1]=g; img.data[o+2]=b; img.data[o+3]=255; }
+    function draw(){
+      for(let y=0, i=0; y<H; y++){
+        for(let x=0; x<W; x++, i++){
+          const v = grid[i];
+          if(v===Material.Empty) { setPx(i, 0, 0, 0); continue; }
+          if(v===Material.Sand){
+            // subtle color variance
+            const t = 180 + ((x+y)&7);
+            setPx(i, t, t-30, 40);
+          }else if(v===Material.Water){
+            const b = 200 + ((x+2*y)&15);
+            setPx(i, 20, 90, b);
+          }else if(v===Material.Stone){
+            const g = 160 + ((x*7+y*3)&15);
+            setPx(i, g, g, g);
+          }else if(v===Material.Smoke){
+            const c = 60 + ((x+y)&31);
+            setPx(i, c, c, c);
+          }
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+      // scale to fit container while preserving pixelation
+      const parent = canvas.parentElement.getBoundingClientRect();
+      const scale = Math.min(parent.width / W,  (window.innerHeight-150) / H);
+      canvas.style.width = Math.floor(W*scale)+'px';
+      canvas.style.height = Math.floor(H*scale)+'px';
+    }
+
+    function idx(x,y){ return y*W + x; }
+    function inside(x,y){ return x>=0 && y>=0 && x<W && y<H; }
+
+    function step(){
+      // start from bottom for gravity-like behavior
+      next.fill(0);
+      // Randomize horizontal sweep to reduce artifacts
+      const leftToRight = Math.random() < 0.5;
+      for(let y=H-1; y>=0; y--){
+        if(leftToRight){
+          for(let x=0; x<W; x++) updateCell(x,y);
+        } else {
+          for(let x=W-1; x>=0; x--) updateCell(x,y);
+        }
+      }
+      temp.set(grid); grid.set(next); next.set(temp.fill(0,0,0));
+    }
+
+    function trySet(x,y,val){ if(inside(x,y) && next[idx(x,y)]===0) { next[idx(x,y)] = val; return true; } return false; }
+    function get(x,y){ return inside(x,y) ? grid[idx(x,y)] : Material.Stone; }
+
+    function updateCell(x,y){
+      const v = get(x,y);
+      if(v===Material.Empty){ return; }
+      if(next[idx(x,y)]!==0){ return; }
+      if(v===Material.Stone){ next[idx(x,y)] = v; return; }
+      if(v===Material.Sand){
+        // down, down-left/right, swap with water
+        if(get(x, y+1)===Material.Empty && trySet(x,y+1,v)) return;
+        const dir = (rand(2)*2-1);
+        if(get(x+dir, y+1)===Material.Empty && trySet(x+dir,y+1,v)) return;
+        if(get(x-dir, y+1)===Material.Empty && trySet(x-dir,y+1,v)) return;
+        // swap with water to sink
+        if(get(x, y+1)===Material.Water && trySet(x,y+1,Material.Sand)) { next[idx(x,y)] = Material.Water; return; }
+        if(get(x+dir, y+1)===Material.Water && trySet(x+dir,y+1,Material.Sand)) { next[idx(x,y)] = Material.Water; return; }
+        next[idx(x,y)] = v; return;
+      }
+      if(v===Material.Water){
+        // flow down then sideways
+        if(get(x, y+1)===Material.Empty && trySet(x,y+1,v)) return;
+        const dirs = Math.random()<0.5 ? [-1,1] : [1,-1];
+        for(const d of dirs){ if(get(x+d,y)===Material.Empty && trySet(x+d,y,v)) return; }
+        // diagonals as fallback
+        for(const d of dirs){ if(get(x+d,y+1)===Material.Empty && trySet(x+d,y+1,v)) return; }
+        next[idx(x,y)] = v; return;
+      }
+      if(v===Material.Smoke){
+        // rises up, spreads sideways
+        if(get(x, y-1)===Material.Empty && trySet(x,y-1,v)) return;
+        const dirs = Math.random()<0.5 ? [-1,1] : [1,-1];
+        for(const d of dirs){ if(get(x+d,y-1)===Material.Empty && trySet(x+d,y-1,v)) return; }
+        for(const d of dirs){ if(get(x+d,y)===Material.Empty && trySet(x+d,y,v)) return; }
+        next[idx(x,y)] = v; return;
+      }
+      next[idx(x,y)] = v;
+    }
+
+    // Interaction
+    const matSel = document.getElementById('material');
+    const brush = document.getElementById('brush');
+    const pauseBtn = document.getElementById('pause');
+    document.getElementById('clear').onclick = ()=>{ grid.fill(0); };
+    document.getElementById('random').onclick = ()=>{
+      for(let i=0;i<grid.length;i++){
+        const r = Math.random();
+        grid[i] = r<0.02?Material.Stone : r<0.05?Material.Water : r<0.08?Material.Sand : 0;
+      }
+    };
+
+    let paused = false; pauseBtn.onclick = ()=>{ paused = !paused; pauseBtn.textContent = paused? '再開' : '一時停止'; };
+
+    function paintAt(clientX, clientY, erase){
+      const rect = canvas.getBoundingClientRect();
+      const sx = (clientX - rect.left) / rect.width * W;
+      const sy = (clientY - rect.top)  / rect.height * H;
+      const r = parseInt(brush.value,10);
+      const mat = erase? Material.Empty : parseInt(matSel.value,10);
+      const rr = r*r;
+      for(let y=Math.max(0,Math.floor(sy-r)); y<Math.min(H,Math.ceil(sy+r)); y++){
+        for(let x=Math.max(0,Math.floor(sx-r)); x<Math.min(W,Math.ceil(sx+r)); x++){
+          const dx=x-sx, dy=y-sy; if(dx*dx+dy*dy<=rr){ grid[idx(x,y)] = mat; }
+        }
+      }
+    }
+
+    let drawing=false, erasing=false;
+    canvas.addEventListener('pointerdown', e=>{ drawing=true; erasing = (e.button===2) || (parseInt(matSel.value,10)===0); paintAt(e.clientX,e.clientY,erasing); });
+    canvas.addEventListener('pointermove', e=>{ if(drawing){ paintAt(e.clientX,e.clientY,erasing); } });
+    window.addEventListener('pointerup', ()=> drawing=false);
+    canvas.addEventListener('contextmenu', e=> e.preventDefault());
+
+    // Main loop
+    let last=performance.now(), frames=0, acc=0; const fpsEl=document.getElementById('fps');
+    function loop(t){
+      const dt = t-last; last=t; frames++; acc+=dt; if(acc>500){ fpsEl.textContent='FPS: '+Math.round(1000/dt); acc=0; }
+      if(!paused){ step(); }
+      draw();
+      requestAnimationFrame(loop);
+    }
+    draw(); requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
+
